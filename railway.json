@@ -1,0 +1,14 @@
+{
+  "build": {
+    "builder": "dockerfile"
+  },
+  "deploy": {
+    "numReplicas": 1,
+    "startCommand": "node server.js",
+    "restartPolicyMaxRetries": 5
+  },
+  "variables": {
+    "PORT": "5000",
+    "NODE_ENV": "production"
+  }
+}
