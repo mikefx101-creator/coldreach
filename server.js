@@ -10,6 +10,15 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 5000;
 
+/* ─── CORS - ALLOW FRONTEND REQUESTS ──────────────────────────────────────── */
+app.use(cors({
+  origin: "*",
+  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type"]
+}));
+
+app.use(express.json());
+
 /* ─── SUPABASE ────────────────────────────────────────────────────────────── */
 const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseKey = process.env.SUPABASE_ANON_KEY;
@@ -22,10 +31,6 @@ const createTransporter = (email, appPassword) => {
     auth: { user: email, pass: appPassword },
   });
 };
-
-/* ─── MIDDLEWARE ──────────────────────────────────────────────────────────── */
-app.use(cors());
-app.use(express.json());
 
 /* ─── HEALTH CHECK ────────────────────────────────────────────────────────── */
 app.get("/", (req, res) => {
@@ -169,7 +174,7 @@ app.get("/api/accounts", async (req, res) => {
 /* ─── API: ADD ACCOUNT ────────────────────────────────────────────────────── */
 app.post("/api/accounts", async (req, res) => {
   try {
-    const { email, label, limit } = req.body;
+    const { email, label, limit, appPassword } = req.body;
 
     const { data, error } = await supabase
       .from("accounts")
@@ -178,8 +183,8 @@ app.post("/api/accounts", async (req, res) => {
           email,
           label,
           limit,
-          appPassword: process.env[`APP_PASSWORD_${email.split("@")[0].toUpperCase()}`],
-          active: false,
+          appPassword,
+          active: true,
           sentToday: 0,
           createdAt: new Date().toISOString(),
         },
