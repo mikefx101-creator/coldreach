@@ -71,6 +71,7 @@ app.post("/api/campaigns", async (req, res) => {
         name,
         status: "draft",
         sequence: sequence || [],
+        schedule: null,
         createdAt: new Date().toISOString(),
       }])
       .select();
@@ -86,11 +87,15 @@ app.post("/api/campaigns", async (req, res) => {
 app.put("/api/campaigns/:id", async (req, res) => {
   try {
     const { id } = req.params;
-    const { name, status, sequence, leads } = req.body;
+    const { name, status, sequence, schedule, leads } = req.body;
+
+    const updatePayload = { name, status, sequence };
+    // Only update schedule if it was explicitly passed
+    if (schedule !== undefined) updatePayload.schedule = schedule;
 
     const { data: campaign, error: campError } = await supabase
       .from("campaigns")
-      .update({ name, status, sequence })
+      .update(updatePayload)
       .eq("id", id)
       .select();
 
@@ -157,11 +162,7 @@ app.post("/api/campaigns/:campaignId/leads", async (req, res) => {
 app.delete("/api/leads/:id", async (req, res) => {
   try {
     const { id } = req.params;
-    const { error } = await supabase
-      .from("leads")
-      .delete()
-      .eq("id", id);
-
+    const { error } = await supabase.from("leads").delete().eq("id", id);
     if (error) throw error;
     res.json({ success: true });
   } catch (err) {
@@ -213,11 +214,7 @@ app.post("/api/accounts", async (req, res) => {
 app.delete("/api/accounts/:id", async (req, res) => {
   try {
     const { id } = req.params;
-    const { error } = await supabase
-      .from("accounts")
-      .delete()
-      .eq("id", id);
-
+    const { error } = await supabase.from("accounts").delete().eq("id", id);
     if (error) throw error;
     res.json({ success: true });
   } catch (err) {
@@ -243,7 +240,6 @@ const sendEmail = async (account, lead, subject, body) => {
 };
 
 /* ─── INTERPOLATE TEMPLATE ────────────────────────────────────────────────── */
-// Replaces all {{variables}} in both subject and body
 const interpolate = (template, lead) => {
   if (!template) return "";
   return template
@@ -254,105 +250,175 @@ const interpolate = (template, lead) => {
     .replace(/\{\{iceBreaker\}\}/g, lead.iceBreaker || "");
 };
 
-/* ─── CRON: DAILY EMAIL SCHEDULER (9 AM IST = 3:30 AM UTC) ──────────────── */
-cron.schedule("30 3 * * *", async () => {
-  console.log("🚀 Running daily email scheduler...");
+/* ─── CORE SEND LOGIC (shared by cron + send-now) ────────────────────────── */
+// isImmediate = true skips the start date / time check (Send Now button)
+const processCampaignLeads = async (campaign, isImmediate = false) => {
+  const today = new Date();
+  // Convert to IST for date comparison
+  const istOffset = 5.5 * 60 * 60 * 1000;
+  const istNow = new Date(today.getTime() + istOffset);
+  const istDateStr = istNow.toISOString().slice(0, 10); // "YYYY-MM-DD"
 
+  // Check start date unless it's an immediate send
+  if (!isImmediate && campaign.schedule?.startDate) {
+    if (istDateStr < campaign.schedule.startDate) {
+      console.log(`Campaign "${campaign.name}" start date not reached yet (${campaign.schedule.startDate})`);
+      return 0;
+    }
+  }
+
+  const { data: leads } = await supabase
+    .from("leads")
+    .select("*")
+    .eq("campaignId", campaign.id)
+    .in("status", ["queued", "sent"]);
+
+  let sentCount = 0;
+
+  for (const lead of leads || []) {
+    if (lead.replied) continue;
+
+    // Fetch fresh account list each lead so sentToday is always current
+    const { data: accounts } = await supabase
+      .from("accounts")
+      .select("*")
+      .eq("active", true);
+
+    if (!accounts || accounts.length === 0) {
+      console.log("No active accounts available");
+      break;
+    }
+
+    const account = accounts
+      .filter(a => a.sentToday < a.limit)
+      .sort((a, b) => a.sentToday - b.sentToday)[0];
+
+    if (!account) {
+      console.log("All accounts at daily limit");
+      break;
+    }
+
+    const currentStep = lead.step || 1;
+    const stepConfig = campaign.sequence?.[currentStep - 1];
+
+    if (!stepConfig) {
+      console.log(`No step config for lead ${lead.id} step ${currentStep}`);
+      continue;
+    }
+
+    let shouldSend = false;
+
+    if (isImmediate) {
+      // Send Now: send to all queued leads regardless of step day
+      if (lead.status === "queued") shouldSend = true;
+    } else {
+      const istToday = new Date(istNow);
+      istToday.setHours(0, 0, 0, 0);
+
+      if (stepConfig.day === 0 && lead.status === "queued") {
+        shouldSend = true;
+      } else if (lead.sentAt && stepConfig.day > 0) {
+        const sentDate = new Date(lead.sentAt);
+        sentDate.setHours(0, 0, 0, 0);
+        const daysAgo = Math.floor((istToday - sentDate) / (1000 * 60 * 60 * 24));
+        if (daysAgo >= stepConfig.day) shouldSend = true;
+      }
+    }
+
+    if (!shouldSend) continue;
+
+    const subject = interpolate(stepConfig.subject, lead);
+    const body = interpolate(stepConfig.body, lead);
+    const sent = await sendEmail(account, lead, subject, body);
+
+    if (sent) {
+      await supabase
+        .from("leads")
+        .update({
+          status: "sent",
+          sentAt: new Date().toISOString(),
+          step: Math.min(currentStep + 1, campaign.sequence?.length || 1),
+        })
+        .eq("id", lead.id);
+
+      await supabase
+        .from("accounts")
+        .update({ sentToday: account.sentToday + 1 })
+        .eq("id", account.id);
+
+      sentCount++;
+      console.log(`✓ Sent to ${lead.email} (Step ${currentStep})`);
+    }
+  }
+
+  return sentCount;
+};
+
+/* ─── API: SEND NOW ───────────────────────────────────────────────────────── */
+// Sends all queued leads of a campaign immediately, ignoring schedule
+app.post("/api/campaigns/:id/send-now", async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const { data: campaignData, error } = await supabase
+      .from("campaigns")
+      .select("*")
+      .eq("id", id)
+      .single();
+
+    if (error) throw error;
+    if (!campaignData) return res.status(404).json({ error: "Campaign not found" });
+    if (!campaignData.sequence || campaignData.sequence.length === 0) {
+      return res.status(400).json({ error: "Campaign has no email sequence. Add steps first." });
+    }
+
+    const sentCount = await processCampaignLeads(campaignData, true);
+    res.json({ success: true, sent: sentCount });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/* ─── CRON: DAILY EMAIL SCHEDULER ────────────────────────────────────────── */
+// Runs every minute, checks each active campaign's scheduled send time
+cron.schedule("* * * * *", async () => {
   try {
     const { data: campaigns } = await supabase
       .from("campaigns")
       .select("*")
       .eq("status", "active");
 
-    for (const campaign of campaigns || []) {
-      const { data: leads } = await supabase
-        .from("leads")
-        .select("*")
-        .eq("campaignId", campaign.id)
-        .in("status", ["queued", "sent"]);
+    if (!campaigns || campaigns.length === 0) return;
 
-      for (const lead of leads || []) {
-        if (lead.replied) continue;
+    // Get current IST time
+    const istOffset = 5.5 * 60 * 60 * 1000;
+    const istNow = new Date(Date.now() + istOffset);
+    const currentHour = istNow.getUTCHours();
+    const currentMinute = istNow.getUTCMinutes();
+    const currentTimeStr = `${String(currentHour).padStart(2,"0")}:${String(currentMinute).padStart(2,"0")}`;
 
-        const { data: accounts } = await supabase
-          .from("accounts")
-          .select("*")
-          .eq("active", true);
+    for (const campaign of campaigns) {
+      // Default send time is 09:00 IST if no schedule set
+      const sendTime = campaign.schedule?.sendTime || "09:00";
 
-        if (!accounts || accounts.length === 0) {
-          console.log("No active accounts available");
-          continue;
-        }
+      if (currentTimeStr !== sendTime) continue;
 
-        // Load balance: pick account with lowest sentToday that hasn't hit limit
-        const account = accounts
-          .filter(a => a.sentToday < a.limit)
-          .sort((a, b) => a.sentToday - b.sentToday)[0];
-
-        if (!account) {
-          console.log("All accounts at daily limit");
-          continue;
-        }
-
-        const currentStep = lead.step || 1;
-        const stepConfig = campaign.sequence?.[currentStep - 1];
-
-        if (!stepConfig) {
-          console.log(`No step config for lead ${lead.id} step ${currentStep}`);
-          continue;
-        }
-
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-        let shouldSend = false;
-
-        if (stepConfig.day === 0 && lead.status === "queued") {
-          shouldSend = true;
-        } else if (lead.sentAt && stepConfig.day > 0) {
-          const sentDate = new Date(lead.sentAt);
-          sentDate.setHours(0, 0, 0, 0);
-          const daysAgo = Math.floor((today - sentDate) / (1000 * 60 * 60 * 24));
-          if (daysAgo >= stepConfig.day) shouldSend = true;
-        }
-
-        if (!shouldSend) continue;
-
-        // Interpolate both subject and body
-        const subject = interpolate(stepConfig.subject, lead);
-        const body = interpolate(stepConfig.body, lead);
-
-        const sent = await sendEmail(account, lead, subject, body);
-
-        if (sent) {
-          await supabase
-            .from("leads")
-            .update({
-              status: "sent",
-              sentAt: new Date().toISOString(),
-              step: Math.min(currentStep + 1, campaign.sequence?.length || 1),
-            })
-            .eq("id", lead.id);
-
-          await supabase
-            .from("accounts")
-            .update({ sentToday: account.sentToday + 1 })
-            .eq("id", account.id);
-
-          console.log(`✓ Sent to ${lead.email} (Step ${currentStep})`);
-        }
-      }
+      console.log(`🚀 Scheduled send for campaign: "${campaign.name}" at ${sendTime} IST`);
+      const sentCount = await processCampaignLeads(campaign, false);
+      console.log(`✓ Campaign "${campaign.name}" sent ${sentCount} emails`);
     }
-
-    console.log("✓ Daily scheduler completed");
   } catch (err) {
     console.error("❌ Scheduler error:", err);
   }
-}, { timezone: "Asia/Kolkata" });
+}, { timezone: "UTC" }); // We handle IST offset manually above
 
 /* ─── CRON: RESET DAILY COUNTERS (12:01 AM IST) ──────────────────────────── */
 cron.schedule("1 0 * * *", async () => {
   try {
-    await supabase.from("accounts").update({ sentToday: 0 }).neq("id", "00000000-0000-0000-0000-000000000000");
+    await supabase
+      .from("accounts")
+      .update({ sentToday: 0 })
+      .neq("id", "00000000-0000-0000-0000-000000000000");
     console.log("✓ Daily counters reset");
   } catch (err) {
     console.error("❌ Counter reset error:", err);
@@ -362,5 +428,5 @@ cron.schedule("1 0 * * *", async () => {
 /* ─── START ───────────────────────────────────────────────────────────────── */
 app.listen(PORT, () => {
   console.log(`🚀 ColdReach Backend running on port ${PORT}`);
-  console.log(`📧 Email scheduler active (9 AM IST daily)`);
+  console.log(`📧 Scheduler active — checks every minute for due campaigns`);
 });
