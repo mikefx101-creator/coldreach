@@ -10,7 +10,7 @@ dotenv.config();
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-/* ─── CORS - ALLOW FRONTEND REQUESTS ──────────────────────────────────────── */
+/* ─── CORS ────────────────────────────────────────────────────────────────── */
 app.use(cors({
   origin: "*",
   methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
@@ -20,11 +20,9 @@ app.use(cors({
 app.use(express.json());
 
 /* ─── SUPABASE ────────────────────────────────────────────────────────────── */
-const supabaseUrl = process.env.SUPABASE_URL;
-const supabaseKey = process.env.SUPABASE_ANON_KEY;
-const supabase = createClient(supabaseUrl, supabaseKey);
+const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANON_KEY);
 
-/* ─── GMAIL CONFIG ────────────────────────────────────────────────────────── */
+/* ─── GMAIL TRANSPORTER ───────────────────────────────────────────────────── */
 const createTransporter = (email, appPassword) => {
   return nodemailer.createTransport({
     service: "gmail",
@@ -37,7 +35,7 @@ app.get("/", (req, res) => {
   res.json({ status: "ColdReach Backend Running", time: new Date().toISOString() });
 });
 
-/* ─── API: GET ALL CAMPAIGNS ──────────────────────────────────────────────── */
+/* ─── GET ALL CAMPAIGNS ───────────────────────────────────────────────────── */
 app.get("/api/campaigns", async (req, res) => {
   try {
     const { data, error } = await supabase
@@ -47,7 +45,6 @@ app.get("/api/campaigns", async (req, res) => {
 
     if (error) throw error;
 
-    // Fetch leads for each campaign
     const campaignsWithLeads = await Promise.all(
       data.map(async (c) => {
         const { data: leads } = await supabase
@@ -64,20 +61,18 @@ app.get("/api/campaigns", async (req, res) => {
   }
 });
 
-/* ─── API: CREATE CAMPAIGN ────────────────────────────────────────────────── */
+/* ─── CREATE CAMPAIGN ─────────────────────────────────────────────────────── */
 app.post("/api/campaigns", async (req, res) => {
   try {
     const { name, sequence } = req.body;
     const { data, error } = await supabase
       .from("campaigns")
-      .insert([
-        {
-          name,
-          status: "draft",
-          sequence: sequence || [],
-          createdAt: new Date().toISOString(),
-        },
-      ])
+      .insert([{
+        name,
+        status: "draft",
+        sequence: sequence || [],
+        createdAt: new Date().toISOString(),
+      }])
       .select();
 
     if (error) throw error;
@@ -87,13 +82,12 @@ app.post("/api/campaigns", async (req, res) => {
   }
 });
 
-/* ─── API: UPDATE CAMPAIGN ────────────────────────────────────────────────── */
+/* ─── UPDATE CAMPAIGN ─────────────────────────────────────────────────────── */
 app.put("/api/campaigns/:id", async (req, res) => {
   try {
     const { id } = req.params;
     const { name, status, sequence, leads } = req.body;
 
-    // Update campaign
     const { data: campaign, error: campError } = await supabase
       .from("campaigns")
       .update({ name, status, sequence })
@@ -102,7 +96,6 @@ app.put("/api/campaigns/:id", async (req, res) => {
 
     if (campError) throw campError;
 
-    // Update leads
     if (leads && leads.length > 0) {
       for (const lead of leads) {
         await supabase
@@ -127,7 +120,7 @@ app.put("/api/campaigns/:id", async (req, res) => {
   }
 });
 
-/* ─── API: ADD LEADS ──────────────────────────────────────────────────────── */
+/* ─── ADD LEADS ───────────────────────────────────────────────────────────── */
 app.post("/api/campaigns/:campaignId/leads", async (req, res) => {
   try {
     const { campaignId } = req.params;
@@ -137,8 +130,12 @@ app.post("/api/campaigns/:campaignId/leads", async (req, res) => {
       .from("leads")
       .insert(
         leads.map((l) => ({
-          ...l,
           campaignId,
+          firstName: l.firstName || "",
+          lastName: l.lastName || "",
+          email: l.email,
+          company: l.company || "",
+          iceBreaker: l.iceBreaker || "",
           status: "queued",
           replied: false,
           repliedAt: null,
@@ -156,7 +153,23 @@ app.post("/api/campaigns/:campaignId/leads", async (req, res) => {
   }
 });
 
-/* ─── API: GET ACCOUNTS ───────────────────────────────────────────────────── */
+/* ─── DELETE LEAD ─────────────────────────────────────────────────────────── */
+app.delete("/api/leads/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { error } = await supabase
+      .from("leads")
+      .delete()
+      .eq("id", id);
+
+    if (error) throw error;
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/* ─── GET ACCOUNTS ────────────────────────────────────────────────────────── */
 app.get("/api/accounts", async (req, res) => {
   try {
     const { data, error } = await supabase
@@ -171,24 +184,22 @@ app.get("/api/accounts", async (req, res) => {
   }
 });
 
-/* ─── API: ADD ACCOUNT ────────────────────────────────────────────────────── */
+/* ─── ADD ACCOUNT ─────────────────────────────────────────────────────────── */
 app.post("/api/accounts", async (req, res) => {
   try {
     const { email, label, limit, appPassword } = req.body;
 
     const { data, error } = await supabase
       .from("accounts")
-      .insert([
-        {
-          email,
-          label,
-          limit,
-          appPassword,
-          active: true,
-          sentToday: 0,
-          createdAt: new Date().toISOString(),
-        },
-      ])
+      .insert([{
+        email,
+        label,
+        limit,
+        appPassword,
+        active: true,
+        sentToday: 0,
+        createdAt: new Date().toISOString(),
+      }])
       .select();
 
     if (error) throw error;
@@ -198,66 +209,62 @@ app.post("/api/accounts", async (req, res) => {
   }
 });
 
-/* ─── API: TEST EMAIL ─────────────────────────────────────────────────────── */
-app.post("/api/test-email", async (req, res) => {
+/* ─── DELETE ACCOUNT ──────────────────────────────────────────────────────── */
+app.delete("/api/accounts/:id", async (req, res) => {
   try {
-    const { email, appPassword, testRecipient } = req.body;
+    const { id } = req.params;
+    const { error } = await supabase
+      .from("accounts")
+      .delete()
+      .eq("id", id);
 
-    const transporter = createTransporter(email, appPassword);
-
-    await transporter.sendMail({
-      from: email,
-      to: testRecipient,
-      subject: "ColdReach Test Email",
-      text: "This is a test email from ColdReach. If you see this, the connection is working!",
-    });
-
-    res.json({ success: true, message: "Test email sent" });
+    if (error) throw error;
+    res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-/* ─── SEND EMAIL FUNCTION ─────────────────────────────────────────────────── */
-const sendEmail = async (account, lead, emailBody, subject) => {
+/* ─── SEND EMAIL HELPER ───────────────────────────────────────────────────── */
+const sendEmail = async (account, lead, subject, body) => {
   try {
     const transporter = createTransporter(account.email, account.appPassword);
-
     await transporter.sendMail({
       from: account.email,
       to: lead.email,
-      subject: subject,
-      text: emailBody,
+      subject,
+      text: body,
     });
-
     return true;
   } catch (err) {
-    console.log(`Failed to send email to ${lead.email}: ${err.message}`);
+    console.log(`Failed to send to ${lead.email}: ${err.message}`);
     return false;
   }
 };
 
-/* ─── INTERPOLATE EMAIL ───────────────────────────────────────────────────── */
-const interpolateEmail = (template, lead) => {
+/* ─── INTERPOLATE TEMPLATE ────────────────────────────────────────────────── */
+// Replaces all {{variables}} in both subject and body
+const interpolate = (template, lead) => {
+  if (!template) return "";
   return template
-    .replace(/\{\{firstName\}\}/g, lead.firstName)
-    .replace(/\{\{lastName\}\}/g, lead.lastName)
-    .replace(/\{\{company\}\}/g, lead.company);
+    .replace(/\{\{firstName\}\}/g, lead.firstName || "")
+    .replace(/\{\{lastName\}\}/g, lead.lastName || "")
+    .replace(/\{\{company\}\}/g, lead.company || "")
+    .replace(/\{\{email\}\}/g, lead.email || "")
+    .replace(/\{\{iceBreaker\}\}/g, lead.iceBreaker || "");
 };
 
-/* ─── CRON: DAILY EMAIL SCHEDULER (runs at 9 AM every day) ─────────────────── */
-cron.schedule("0 9 * * *", async () => {
+/* ─── CRON: DAILY EMAIL SCHEDULER (9 AM IST = 3:30 AM UTC) ──────────────── */
+cron.schedule("30 3 * * *", async () => {
   console.log("🚀 Running daily email scheduler...");
 
   try {
-    // Fetch all campaigns that are active
     const { data: campaigns } = await supabase
       .from("campaigns")
       .select("*")
       .eq("status", "active");
 
     for (const campaign of campaigns || []) {
-      // Fetch leads for this campaign that are queued or in progress
       const { data: leads } = await supabase
         .from("leads")
         .select("*")
@@ -265,26 +272,28 @@ cron.schedule("0 9 * * *", async () => {
         .in("status", ["queued", "sent"]);
 
       for (const lead of leads || []) {
-        // Skip if already replied
         if (lead.replied) continue;
 
-        // Fetch active accounts
         const { data: accounts } = await supabase
           .from("accounts")
           .select("*")
           .eq("active", true);
 
-        // Pick an account with lowest sentToday count (load balancing)
-        const account = accounts?.reduce((min, acc) =>
-          acc.sentToday < min.sentToday ? acc : min
-        );
-
-        if (!account) {
+        if (!accounts || accounts.length === 0) {
           console.log("No active accounts available");
           continue;
         }
 
-        // Check which step to send
+        // Load balance: pick account with lowest sentToday that hasn't hit limit
+        const account = accounts
+          .filter(a => a.sentToday < a.limit)
+          .sort((a, b) => a.sentToday - b.sentToday)[0];
+
+        if (!account) {
+          console.log("All accounts at daily limit");
+          continue;
+        }
+
         const currentStep = lead.step || 1;
         const stepConfig = campaign.sequence?.[currentStep - 1];
 
@@ -293,36 +302,28 @@ cron.schedule("0 9 * * *", async () => {
           continue;
         }
 
-        // Check if it's time to send this step
-        const today_ = new Date();
-        today_.setHours(0, 0, 0, 0);
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
         let shouldSend = false;
 
         if (stepConfig.day === 0 && lead.status === "queued") {
-          // Initial send
           shouldSend = true;
         } else if (lead.sentAt && stepConfig.day > 0) {
-          // Follow-up send
           const sentDate = new Date(lead.sentAt);
           sentDate.setHours(0, 0, 0, 0);
-          const daysAgo = Math.floor((today_ - sentDate) / (1000 * 60 * 60 * 24));
-          if (daysAgo >= stepConfig.day) {
-            shouldSend = true;
-          }
+          const daysAgo = Math.floor((today - sentDate) / (1000 * 60 * 60 * 24));
+          if (daysAgo >= stepConfig.day) shouldSend = true;
         }
 
         if (!shouldSend) continue;
-        if (account.sentToday >= account.limit) continue;
 
-        // Interpolate email
-        const subject = interpolateEmail(stepConfig.subject, lead);
-        const body = interpolateEmail(stepConfig.body, lead);
+        // Interpolate both subject and body
+        const subject = interpolate(stepConfig.subject, lead);
+        const body = interpolate(stepConfig.body, lead);
 
-        // Send email
-        const sent = await sendEmail(account, lead, body, subject);
+        const sent = await sendEmail(account, lead, subject, body);
 
         if (sent) {
-          // Update lead
           await supabase
             .from("leads")
             .update({
@@ -332,7 +333,6 @@ cron.schedule("0 9 * * *", async () => {
             })
             .eq("id", lead.id);
 
-          // Update account sentToday
           await supabase
             .from("accounts")
             .update({ sentToday: account.sentToday + 1 })
@@ -347,25 +347,20 @@ cron.schedule("0 9 * * *", async () => {
   } catch (err) {
     console.error("❌ Scheduler error:", err);
   }
-});
+}, { timezone: "Asia/Kolkata" });
 
-/* ─── RESET DAILY COUNTERS (runs at 12:01 AM every day) ───────────────────── */
+/* ─── CRON: RESET DAILY COUNTERS (12:01 AM IST) ──────────────────────────── */
 cron.schedule("1 0 * * *", async () => {
   try {
-    const { data: accounts } = await supabase.from("accounts").select("*");
-
-    for (const acc of accounts || []) {
-      await supabase.from("accounts").update({ sentToday: 0 }).eq("id", acc.id);
-    }
-
+    await supabase.from("accounts").update({ sentToday: 0 }).neq("id", "00000000-0000-0000-0000-000000000000");
     console.log("✓ Daily counters reset");
   } catch (err) {
     console.error("❌ Counter reset error:", err);
   }
-});
+}, { timezone: "Asia/Kolkata" });
 
-/* ─── START SERVER ────────────────────────────────────────────────────────── */
+/* ─── START ───────────────────────────────────────────────────────────────── */
 app.listen(PORT, () => {
   console.log(`🚀 ColdReach Backend running on port ${PORT}`);
-  console.log(`📧 Email scheduler active`);
+  console.log(`📧 Email scheduler active (9 AM IST daily)`);
 });
