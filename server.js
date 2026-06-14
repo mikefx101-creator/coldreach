@@ -355,10 +355,11 @@ const processCampaignLeads = async (campaign, isImmediate = false) => {
 };
 
 /* ─── API: SEND NOW ───────────────────────────────────────────────────────── */
-// Sends all queued leads of a campaign immediately, ignoring schedule
 app.post("/api/campaigns/:id/send-now", async (req, res) => {
+  const debugLog = [];
   try {
     const { id } = req.params;
+    debugLog.push(`Campaign ID: ${id}`);
 
     const { data: campaignData, error } = await supabase
       .from("campaigns")
@@ -371,11 +372,80 @@ app.post("/api/campaigns/:id/send-now", async (req, res) => {
     if (!campaignData.sequence || campaignData.sequence.length === 0) {
       return res.status(400).json({ error: "Campaign has no email sequence. Add steps first." });
     }
+    debugLog.push(`Campaign found: ${campaignData.name}, sequence steps: ${campaignData.sequence.length}`);
 
-    const sentCount = await processCampaignLeads(campaignData, true);
-    res.json({ success: true, sent: sentCount });
+    // Fetch leads
+    const { data: leads, error: leadsError } = await supabase
+      .from("leads")
+      .select("*")
+      .eq("campaignId", id)
+      .in("status", ["queued", "sent"]);
+
+    if (leadsError) throw leadsError;
+    debugLog.push(`Leads found: ${leads?.length || 0}`);
+
+    // Fetch accounts
+    const { data: accounts, error: accError } = await supabase
+      .from("accounts")
+      .select("*")
+      .eq("active", true);
+
+    if (accError) throw accError;
+    debugLog.push(`Active accounts: ${accounts?.length || 0}`);
+
+    if (!accounts || accounts.length === 0) {
+      return res.status(400).json({ error: "No active email accounts found", debug: debugLog });
+    }
+
+    const account = accounts.filter(a => a.sentToday < a.limit).sort((a, b) => a.sentToday - b.sentToday)[0];
+    if (!account) {
+      return res.status(400).json({ error: "All accounts at daily limit", debug: debugLog });
+    }
+    debugLog.push(`Using account: ${account.email}, sentToday: ${account.sentToday}, limit: ${account.limit}`);
+
+    let sentCount = 0;
+    let emailErrors = [];
+
+    for (const lead of leads || []) {
+      if (lead.replied) { debugLog.push(`Skipping ${lead.email} — already replied`); continue; }
+      if (lead.status !== "queued") { debugLog.push(`Skipping ${lead.email} — status is ${lead.status}`); continue; }
+
+      const stepConfig = campaignData.sequence[0]; // Always send step 1 on Send Now
+      debugLog.push(`Step config subject: "${stepConfig?.subject}", body length: ${stepConfig?.body?.length || 0}`);
+
+      if (!stepConfig || !stepConfig.subject || !stepConfig.body) {
+        debugLog.push(`Skipping ${lead.email} — step 1 has empty subject or body`);
+        continue;
+      }
+
+      const subject = interpolate(stepConfig.subject, lead);
+      const body = interpolate(stepConfig.body, lead);
+      debugLog.push(`Sending to ${lead.email} with subject: "${subject}"`);
+
+      try {
+        const transporter = createTransporter(account.email, account.appPassword);
+        await transporter.sendMail({ from: account.email, to: lead.email, subject, text: body });
+
+        await supabase.from("leads").update({
+          status: "sent",
+          sentAt: new Date().toISOString(),
+          step: Math.min(2, campaignData.sequence.length),
+        }).eq("id", lead.id);
+
+        await supabase.from("accounts").update({ sentToday: account.sentToday + sentCount + 1 }).eq("id", account.id);
+
+        sentCount++;
+        debugLog.push(`✓ Sent to ${lead.email}`);
+      } catch (emailErr) {
+        const errMsg = emailErr.message;
+        debugLog.push(`✗ Failed to send to ${lead.email}: ${errMsg}`);
+        emailErrors.push({ email: lead.email, error: errMsg });
+      }
+    }
+
+    res.json({ success: true, sent: sentCount, debug: debugLog, errors: emailErrors });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: err.message, debug: debugLog });
   }
 });
 
