@@ -1,37 +1,24 @@
 {
   "name": "coldreach-backend",
   "version": "1.0.0",
-  "description": "ColdReach - Cold Email Automation Platform",
-  "main": "server.js",
+  "description": "Cold email automation platform",
   "type": "module",
-  "engines": {
-    "node": "18.x"
-  },
+  "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "node --watch server.js"
+    "dev": "node server.js"
   },
-  "keywords": [
-    "cold-email",
-    "automation",
-    "email-marketing",
-    "smtp",
-    "nodejs"
-  ],
-  "author": "ColdReach",
-  "license": "MIT",
+  "engines": {
+    "node": "20.x"
+  },
   "dependencies": {
     "express": "^4.18.2",
     "cors": "^2.8.5",
-    "nodemailer": "^6.9.7",
-    "node-cron": "^3.0.3",
-    "@supabase/supabase-js": "^2.38.5",
-    "dotenv": "^16.3.1"
-  },
-  "devDependencies": {},
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/mikefx101-creator/coldreach"
+    "nodemailer": "^6.9.4",
+    "node-cron": "^3.0.2",
+    "@supabase/supabase-js": "^2.38.4",
+    "dotenv": "^16.3.1",
+    "googleapis": "^118.0.0",
+    "base64-url": "^2.4.1"
   }
 }
-
