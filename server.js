@@ -4,7 +4,6 @@ import cron from "node-cron";
 import { createClient } from "@supabase/supabase-js";
 import { google } from "googleapis";
 import dotenv from "dotenv";
-import base64url from "base64-url";
 
 dotenv.config();
 
@@ -75,7 +74,7 @@ const sendEmailViaGmail = async (gmailAccount, recipient, subject, body) => {
 
     // Create email message
     const message = `From: ${gmailAccount.email}\r\nTo: ${recipient}\r\nSubject: ${subject}\r\n\r\n${body}`;
-    const encodedMessage = base64url.escape(Buffer.from(message).toString("base64"));
+    const encodedMessage = Buffer.from(message).toString("base64").replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
 
     // Send email
     await gmail.users.messages.send({
