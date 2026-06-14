@@ -28,8 +28,16 @@ let gmailCredentials = null;
 
 function initGmailOAuth() {
   try {
-    gmailCredentials = JSON.parse(process.env.GMAIL_OAUTH_CREDENTIALS);
-    const { client_id, client_secret, redirect_uris } = gmailCredentials.installed;
+    const credentials = JSON.parse(process.env.GMAIL_OAUTH_CREDENTIALS);
+    
+    // Handle both "web" (Web application) and "installed" (Desktop app) formats
+    const config = credentials.web || credentials.installed;
+    
+    if (!config) {
+      throw new Error("Invalid credentials format - missing 'web' or 'installed' key");
+    }
+
+    const { client_id, client_secret, redirect_uris } = config;
     
     oauth2Client = new google.auth.OAuth2(
       client_id,
