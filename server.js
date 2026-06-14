@@ -25,7 +25,9 @@ const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANO
 /* ─── GMAIL TRANSPORTER ───────────────────────────────────────────────────── */
 const createTransporter = (email, appPassword) => {
   return nodemailer.createTransport({
-    service: "gmail",
+    host: "smtp.gmail.com",
+    port: 465,
+    secure: true,
     auth: { user: email, pass: appPassword },
   });
 };
