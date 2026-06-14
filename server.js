@@ -107,6 +107,80 @@ app.get("/", (req, res) => {
   res.json({ status: "ColdReach Backend Running", time: new Date().toISOString() });
 });
 
+/* ─── OAUTH: GET AUTHORIZATION URL ────────────────────────────────────────── */
+app.get("/auth/google", (req, res) => {
+  try {
+    if (!oauth2Client) {
+      return res.status(500).json({ error: "OAuth2 client not initialized" });
+    }
+
+    const authUrl = oauth2Client.generateAuthUrl({
+      access_type: "offline",
+      scope: ["https://www.googleapis.com/auth/gmail.send"],
+    });
+
+    res.json({ authUrl });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/* ─── OAUTH: CALLBACK (GOOGLE REDIRECTS HERE) ────────────────────────────── */
+app.get("/auth/google/callback", async (req, res) => {
+  try {
+    const code = req.query.code;
+    const email = req.query.email;
+
+    if (!code || !email) {
+      return res.status(400).json({ error: "Missing code or email" });
+    }
+
+    // Exchange code for tokens
+    const { tokens } = await oauth2Client.getToken(code);
+    const refreshToken = tokens.refresh_token;
+
+    if (!refreshToken) {
+      return res.status(400).json({ error: "Failed to get refresh token. Make sure to select 'Offline access' during authorization." });
+    }
+
+    // Store refresh token in database
+    const { data: existingAccount } = await supabase
+      .from("accounts")
+      .select("id")
+      .eq("email", email)
+      .single();
+
+    if (existingAccount) {
+      // Update existing account
+      await supabase
+        .from("accounts")
+        .update({ appPassword: refreshToken })
+        .eq("id", existingAccount.id);
+    } else {
+      // Create new account
+      await supabase
+        .from("accounts")
+        .insert([{
+          email,
+          label: email,
+          limit: 100,
+          appPassword: refreshToken,
+          active: true,
+          sentToday: 0,
+          createdAt: new Date().toISOString(),
+        }]);
+    }
+
+    res.json({
+      success: true,
+      message: `Gmail account ${email} authorized successfully!`,
+      email: email
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 /* ─── GET ALL CAMPAIGNS ───────────────────────────────────────────────────── */
 app.get("/api/campaigns", async (req, res) => {
   try {
