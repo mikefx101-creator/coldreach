@@ -185,18 +185,28 @@ app.get("/auth/google", (req, res) => {
 app.get("/auth/google/callback", async (req, res) => {
   try {
     const code = req.query.code;
-    const email = req.query.email;
 
-    if (!code || !email) {
-      return res.status(400).json({ error: "Missing code or email" });
+    if (!code) {
+      return res.status(400).json({ error: "Missing authorization code" });
     }
 
     // Exchange code for tokens
     const { tokens } = await oauth2Client.getToken(code);
     const refreshToken = tokens.refresh_token;
+    const accessToken = tokens.access_token;
 
     if (!refreshToken) {
       return res.status(400).json({ error: "Failed to get refresh token. Make sure to select 'Offline access' during authorization." });
+    }
+
+    // Get user's email from Google API
+    oauth2Client.setCredentials({ access_token: accessToken });
+    const gmail = google.gmail({ version: "v1", auth: oauth2Client });
+    const profile = await gmail.users.getProfile({ userId: "me" });
+    const email = profile.data.emailAddress;
+
+    if (!email) {
+      return res.status(400).json({ error: "Could not retrieve email from Google account" });
     }
 
     // Store refresh token in database
@@ -236,7 +246,6 @@ app.get("/auth/google/callback", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
-
 /* ─── GET ALL CAMPAIGNS ───────────────────────────────────────────────────── */
 app.get("/api/campaigns", async (req, res) => {
   try {
