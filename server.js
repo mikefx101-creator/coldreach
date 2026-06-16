@@ -115,6 +115,54 @@ app.get("/", (req, res) => {
   res.json({ status: "ColdReach Backend Running", time: new Date().toISOString() });
 });
 
+/* ─── PRIVACY POLICY ──────────────────────────────────────────────────────── */
+app.get("/privacy", (req, res) => {
+  res.send(`
+    <!DOCTYPE html>
+    <html>
+    <head><title>Privacy Policy - ColdReach</title></head>
+    <body style="max-width:800px;margin:40px auto;font-family:sans-serif;line-height:1.6">
+      <h1>Privacy Policy</h1>
+      <p><strong>Last Updated:</strong> June 2026</p>
+      <h2>Information We Collect</h2>
+      <p>ColdReach collects email addresses and campaign data to enable cold email automation.</p>
+      <h2>How We Use Your Data</h2>
+      <p>We use Gmail API access only to send emails on your behalf. We do not store email contents or access your inbox.</p>
+      <h2>Data Security</h2>
+      <p>All data is stored securely in Supabase PostgreSQL with encryption at rest.</p>
+      <h2>Third-Party Services</h2>
+      <p>We use Google Gmail API and Supabase. See their privacy policies for more info.</p>
+      <h2>Contact</h2>
+      <p>Email: frdhdu55@gmail.com</p>
+    </body>
+    </html>
+  `);
+});
+
+/* ─── TERMS OF SERVICE ────────────────────────────────────────────────────── */
+app.get("/terms", (req, res) => {
+  res.send(`
+    <!DOCTYPE html>
+    <html>
+    <head><title>Terms of Service - ColdReach</title></head>
+    <body style="max-width:800px;margin:40px auto;font-family:sans-serif;line-height:1.6">
+      <h1>Terms of Service</h1>
+      <p><strong>Last Updated:</strong> June 2026</p>
+      <h2>Use License</h2>
+      <p>ColdReach is provided as-is for email automation purposes.</p>
+      <h2>Disclaimer</h2>
+      <p>Users are responsible for complying with anti-spam laws (CAN-SPAM, GDPR, etc.). ColdReach is not liable for misuse.</p>
+      <h2>Limitations</h2>
+      <p>We reserve the right to suspend accounts that violate our policies or applicable law.</p>
+      <h2>Changes to Terms</h2>
+      <p>We may update these terms at any time.</p>
+      <h2>Contact</h2>
+      <p>Email: frdhdu55@gmail.com</p>
+    </body>
+    </html>
+  `);
+});
+
 /* ─── OAUTH: GET AUTHORIZATION URL ────────────────────────────────────────── */
 app.get("/auth/google", (req, res) => {
   try {
