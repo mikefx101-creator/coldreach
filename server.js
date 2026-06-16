@@ -171,9 +171,10 @@ app.get("/auth/google", (req, res) => {
     }
 
     const authUrl = oauth2Client.generateAuthUrl({
-      access_type: "offline",
-      scope: ["https://www.googleapis.com/auth/gmail.send"],
-    });
+  access_type: "offline",
+  scope: ["https://www.googleapis.com/auth/gmail.send"],
+  prompt: "consent"  // Force consent screen every time
+});
 
     res.json({ authUrl });
   } catch (err) {
