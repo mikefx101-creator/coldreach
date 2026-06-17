@@ -2,7 +2,7 @@ import express from "express";
 import cors from "cors";
 import cron from "node-cron";
 import { createClient } from "@supabase/supabase-js";
-import { google } from "googleapis";
+import { Resend } from "resend";
 import dotenv from "dotenv";
 
 dotenv.config();
@@ -22,75 +22,26 @@ app.use(express.json());
 /* ─── SUPABASE ────────────────────────────────────────────────────────────── */
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANON_KEY);
 
-/* ─── GMAIL API OAUTH ─────────────────────────────────────────────────────── */
-let oauth2Client = null;
-let gmailCredentials = null;
+/* ─── RESEND EMAIL API ────────────────────────────────────────────────────── */
+const resend = new Resend(process.env.RESEND_API_KEY);
+const RESEND_FROM_EMAIL = process.env.RESEND_FROM_EMAIL || "frdhdu55@gmail.com";
 
-function initGmailOAuth() {
+console.log(`✓ Resend initialized - sending from: ${RESEND_FROM_EMAIL}`);
+
+/* ─── SEND EMAIL VIA RESEND ───────────────────────────────────────────────── */
+const sendEmailViaResend = async (recipient, subject, body) => {
   try {
-    const credentials = JSON.parse(process.env.GMAIL_OAUTH_CREDENTIALS);
-    
-    // Handle both "web" (Web application) and "installed" (Desktop app) formats
-    const config = credentials.web || credentials.installed;
-    
-    if (!config) {
-      throw new Error("Invalid credentials format - missing 'web' or 'installed' key");
-    }
-
-    const { client_id, client_secret, redirect_uris } = config;
-    
-    oauth2Client = new google.auth.OAuth2(
-      client_id,
-      client_secret,
-      redirect_uris[0] || "http://localhost:5000/auth/google/callback"
-    );
-    
-    console.log("✓ Gmail OAuth2 client initialized");
-  } catch (err) {
-    console.error("❌ Failed to initialize Gmail OAuth:", err.message);
-  }
-}
-
-initGmailOAuth();
-
-/* ─── SEND EMAIL VIA GMAIL API ────────────────────────────────────────────── */
-const sendEmailViaGmail = async (gmailAccount, recipient, subject, body) => {
-  try {
-    // Get stored refresh token for this Gmail account
-    const { data: accountData } = await supabase
-      .from("accounts")
-      .select("appPassword")
-      .eq("email", gmailAccount.email)
-      .single();
-
-    if (!accountData || !accountData.appPassword) {
-      throw new Error(`No refresh token stored for ${gmailAccount.email}`);
-    }
-
-    const refreshToken = accountData.appPassword;
-
-    // Set refresh token and get new access token
-    oauth2Client.setCredentials({
-      refresh_token: refreshToken
+    const response = await resend.emails.send({
+      from: RESEND_FROM_EMAIL,
+      to: recipient,
+      subject: subject,
+      html: body.replace(/\n/g, "<br>") // Convert newlines to HTML breaks
     });
 
-    const { credentials } = await oauth2Client.refreshAccessToken();
-    oauth2Client.setCredentials(credentials);
-
-    // Create Gmail API instance
-    const gmail = google.gmail({ version: "v1", auth: oauth2Client });
-
-    // Create email message
-    const message = `From: ${gmailAccount.email}\r\nTo: ${recipient}\r\nSubject: ${subject}\r\n\r\n${body}`;
-    const encodedMessage = Buffer.from(message).toString("base64").replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
-
-    // Send email
-    await gmail.users.messages.send({
-      userId: "me",
-      requestBody: {
-        raw: encodedMessage
-      }
-    });
+    if (response.error) {
+      console.log(`Failed to send to ${recipient}: ${response.error.message}`);
+      return false;
+    }
 
     return true;
   } catch (err) {
@@ -127,11 +78,11 @@ app.get("/privacy", (req, res) => {
       <h2>Information We Collect</h2>
       <p>ColdReach collects email addresses and campaign data to enable cold email automation.</p>
       <h2>How We Use Your Data</h2>
-      <p>We use Gmail API access only to send emails on your behalf. We do not store email contents or access your inbox.</p>
+      <p>We use Resend API to send emails on your behalf. We do not store email contents or access inboxes.</p>
       <h2>Data Security</h2>
       <p>All data is stored securely in Supabase PostgreSQL with encryption at rest.</p>
       <h2>Third-Party Services</h2>
-      <p>We use Google Gmail API and Supabase. See their privacy policies for more info.</p>
+      <p>We use Resend for email delivery and Supabase for data storage. See their privacy policies for more info.</p>
       <h2>Contact</h2>
       <p>Email: frdhdu55@gmail.com</p>
     </body>
@@ -163,90 +114,6 @@ app.get("/terms", (req, res) => {
   `);
 });
 
-/* ─── OAUTH: GET AUTHORIZATION URL ────────────────────────────────────────── */
-app.get("/auth/google", (req, res) => {
-  try {
-    if (!oauth2Client) {
-      return res.status(500).json({ error: "OAuth2 client not initialized" });
-    }
-
-    const authUrl = oauth2Client.generateAuthUrl({
-  access_type: "offline",
-  scope: ["https://www.googleapis.com/auth/gmail.send"],
-  prompt: "consent"  // Force consent screen every time
-});
-
-    res.json({ authUrl });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-/* ─── OAUTH: CALLBACK (GOOGLE REDIRECTS HERE) ────────────────────────────── */
-app.get("/auth/google/callback", async (req, res) => {
-  try {
-    const code = req.query.code;
-
-    if (!code) {
-      return res.status(400).json({ error: "Missing authorization code" });
-    }
-
-    // Exchange code for tokens
-    const { tokens } = await oauth2Client.getToken(code);
-    const refreshToken = tokens.refresh_token;
-    const accessToken = tokens.access_token;
-
-    if (!refreshToken) {
-      return res.status(400).json({ error: "Failed to get refresh token. Make sure to select 'Offline access' during authorization." });
-    }
-
-    // Get user's email from Google API
-    oauth2Client.setCredentials({ access_token: accessToken });
-    const gmail = google.gmail({ version: "v1", auth: oauth2Client });
-    const profile = await gmail.users.getProfile({ userId: "me" });
-    const email = profile.data.emailAddress;
-
-    if (!email) {
-      return res.status(400).json({ error: "Could not retrieve email from Google account" });
-    }
-
-    // Store refresh token in database
-    const { data: existingAccount } = await supabase
-      .from("accounts")
-      .select("id")
-      .eq("email", email)
-      .single();
-
-    if (existingAccount) {
-      // Update existing account
-      await supabase
-        .from("accounts")
-        .update({ appPassword: refreshToken })
-        .eq("id", existingAccount.id);
-    } else {
-      // Create new account
-      await supabase
-        .from("accounts")
-        .insert([{
-          email,
-          label: email,
-          limit: 100,
-          appPassword: refreshToken,
-          active: true,
-          sentToday: 0,
-          createdAt: new Date().toISOString(),
-        }]);
-    }
-
-    res.json({
-      success: true,
-      message: `Gmail account ${email} authorized successfully!`,
-      email: email
-    });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
 /* ─── GET ALL CAMPAIGNS ───────────────────────────────────────────────────── */
 app.get("/api/campaigns", async (req, res) => {
   try {
@@ -396,19 +263,20 @@ app.get("/api/accounts", async (req, res) => {
   }
 });
 
-/* ─── ADD ACCOUNT (NOW STORES REFRESH TOKEN) ──────────────────────────────── */
+/* ─── ADD ACCOUNT ─────────────────────────────────────────────────────────── */
 app.post("/api/accounts", async (req, res) => {
   try {
-    const { email, label, limit, appPassword } = req.body;
+    const { email, label, limit } = req.body;
     
-    // appPassword now contains the refresh token from Google OAuth
+    // With Resend, all emails are sent from the same account
+    // This endpoint just stores account labels and daily limits for tracking
     const { data, error } = await supabase
       .from("accounts")
       .insert([{
-        email,
-        label,
-        limit,
-        appPassword, // This is actually the refresh token
+        email: RESEND_FROM_EMAIL,
+        label: label || email,
+        limit: limit || 100,
+        appPassword: null, // Not used with Resend
         active: true,
         sentToday: 0,
         createdAt: new Date().toISOString(),
@@ -472,14 +340,14 @@ app.post("/api/campaigns/:id/send-now", async (req, res) => {
     debugLog.push(`Active accounts: ${accounts?.length || 0}`);
 
     if (!accounts || accounts.length === 0) {
-      return res.status(400).json({ error: "No active email accounts found", debug: debugLog });
+      return res.status(400).json({ error: "No active sending accounts configured", debug: debugLog });
     }
 
     const account = accounts.filter(a => a.sentToday < a.limit).sort((a, b) => a.sentToday - b.sentToday)[0];
     if (!account) {
       return res.status(400).json({ error: "All accounts at daily limit", debug: debugLog });
     }
-    debugLog.push(`Using account: ${account.email}`);
+    debugLog.push(`Using account: ${account.label}`);
 
     let sentCount = 0;
     let emailErrors = [];
@@ -498,7 +366,7 @@ app.post("/api/campaigns/:id/send-now", async (req, res) => {
       const body = interpolate(stepConfig.body, lead);
       debugLog.push(`Sending to ${lead.email}`);
 
-      const sent = await sendEmailViaGmail(account, lead.email, subject, body);
+      const sent = await sendEmailViaResend(lead.email, subject, body);
 
       if (sent) {
         await supabase.from("leads").update({
@@ -543,7 +411,43 @@ cron.schedule("* * * * *", async () => {
       if (currentTimeStr !== sendTime) continue;
 
       console.log(`🚀 Scheduled send for: ${campaign.name}`);
-      // Simplified cron send logic
+      // Simplified cron send logic - triggers /send-now equivalent
+      const { data: leads } = await supabase
+        .from("leads")
+        .select("*")
+        .eq("campaignId", campaign.id)
+        .eq("status", "queued");
+
+      if (!leads || leads.length === 0) continue;
+
+      const { data: accounts } = await supabase
+        .from("accounts")
+        .select("*")
+        .eq("active", true);
+
+      if (!accounts || accounts.length === 0) continue;
+
+      const account = accounts.filter(a => a.sentToday < a.limit).sort((a, b) => a.sentToday - b.sentToday)[0];
+      if (!account) continue;
+
+      for (const lead of leads) {
+        const stepConfig = campaign.sequence[0];
+        if (!stepConfig || !stepConfig.subject || !stepConfig.body) continue;
+
+        const subject = interpolate(stepConfig.subject, lead);
+        const body = interpolate(stepConfig.body, lead);
+
+        const sent = await sendEmailViaResend(lead.email, subject, body);
+        if (sent) {
+          await supabase.from("leads").update({
+            status: "sent",
+            sentAt: new Date().toISOString(),
+            step: 2,
+          }).eq("id", lead.id);
+
+          await supabase.from("accounts").update({ sentToday: account.sentToday + 1 }).eq("id", account.id);
+        }
+      }
     }
   } catch (err) {
     console.error("❌ Scheduler error:", err);
@@ -563,5 +467,6 @@ cron.schedule("1 0 * * *", async () => {
 /* ─── START ───────────────────────────────────────────────────────────────── */
 app.listen(PORT, () => {
   console.log(`🚀 ColdReach Backend running on port ${PORT}`);
-  console.log(`📧 Gmail API enabled - Scheduler active`);
+  console.log(`📧 Resend API enabled - Scheduler active`);
+  console.log(`📬 Sending from: ${RESEND_FROM_EMAIL}`);
 });
