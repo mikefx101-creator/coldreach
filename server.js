@@ -31,21 +31,26 @@ console.log(`✓ Resend initialized - sending from: ${RESEND_FROM_EMAIL}`);
 /* ─── SEND EMAIL VIA RESEND ───────────────────────────────────────────────── */
 const sendEmailViaResend = async (recipient, subject, body) => {
   try {
+    console.log(`📤 Attempting to send to ${recipient}`);
+    console.log(`API Key exists: ${!!process.env.RESEND_API_KEY}`);
+    console.log(`From email: ${RESEND_FROM_EMAIL}`);
+    
     const response = await resend.emails.send({
       from: RESEND_FROM_EMAIL,
       to: recipient,
       subject: subject,
-      html: body.replace(/\n/g, "<br>") // Convert newlines to HTML breaks
+      html: body.replace(/\n/g, "<br>")
     });
 
     if (response.error) {
-      console.log(`Failed to send to ${recipient}: ${response.error.message}`);
+      console.error(`❌ Resend error for ${recipient}: ${JSON.stringify(response.error)}`);
       return false;
     }
 
+    console.log(`✅ Sent to ${recipient}`);
     return true;
   } catch (err) {
-    console.log(`Failed to send to ${recipient}: ${err.message}`);
+    console.error(`❌ Exception for ${recipient}: ${err.message}`);
     return false;
   }
 };
