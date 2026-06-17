@@ -268,15 +268,12 @@ app.post("/api/accounts", async (req, res) => {
   try {
     const { email, label, limit } = req.body;
     
-    // With Resend, all emails are sent from the same account
-    // This endpoint just stores account labels and daily limits for tracking
     const { data, error } = await supabase
       .from("accounts")
       .insert([{
         email: RESEND_FROM_EMAIL,
         label: label || email,
         limit: limit || 100,
-        appPassword: null, // Not used with Resend
         active: true,
         sentToday: 0,
         createdAt: new Date().toISOString(),
